@@ -14,7 +14,7 @@ for (const match of [...html.matchAll(/<link\b[^>]*rel="stylesheet"[^>]*href="([
   html = html.replace(match[0], () => `<style>${css.replace(/<\/style/gi, '<\\/style')}</style>`);
 }
 const icon = await readFile(resolve(root, 'public/favicon.svg'), 'utf8');
-html = html.replace('href="/favicon.svg"', () => `href="data:image/svg+xml,${encodeURIComponent(icon)}"`);
+html = html.replace(/href="\.?\/favicon\.svg"/, () => `href="data:image/svg+xml,${encodeURIComponent(icon)}"`);
 if (/<(?:script|link)\b[^>]*(?:src|href)="(?!data:)/i.test(html)) throw new Error('External asset reference remains');
 await writeFile(resolve(root, 'PromptAtelier.html'), html);
 await writeFile(resolve(root, 'dist/index.html'), html);

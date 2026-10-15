@@ -3,6 +3,8 @@ import { qualityTags } from './extra-options';
 export type Choice = { enabled: boolean; locked: boolean; selected: number };
 export type Choices = Record<string, Choice>;
 export const STORAGE_KEY = 'prompt-atelier-v1';
+// Regular candidate counts when version 3 saves were written. NSFW-only candidates sit right after the regular ones.
+const V3_REGULAR_COUNTS: Record<string, number> = { hairStyle: 111, hairColor: 62, eyes: 87, expression: 123, outfit: 253, pose: 161, background: 228, framing: 101, lighting: 98, artStyle: 77, artist: 100 };
 export function initialChoices(): Choices {
   return Object.fromEntries(categories.map(c => [c.id, { enabled: true, locked: false, selected: Math.floor(Math.random() * c.options.length) }]));
 }
@@ -31,7 +33,7 @@ export function buildPrompt(state: Choices, quality: string[] = [], adult = fals
 export function restore(raw: string | null, adult = false): Choices {
   try {
     const value = JSON.parse(raw ?? 'null');
-    if (!value || ![1, 2, 3].includes(value.version) || !value.choices) return initialChoices();
+    if (!value || ![1, 2, 3, 4].includes(value.version) || !value.choices) return initialChoices();
     // Version 1 stored adult outfits after the original 36 regular outfits.
     // Move those saved indices past the newly appended regular candidates.
     if (value.version === 1 && value.choices.outfit && Number.isInteger(value.choices.outfit.selected) && value.choices.outfit.selected >= 36 && value.choices.outfit.selected < 52) {
@@ -40,6 +42,11 @@ export function restore(raw: string | null, adult = false): Choices {
     // Version 2 stored adult outfits right after the regular candidates, before the Danbooru candidates were appended.
     if (value.version === 2 && value.choices.outfit && Number.isInteger(value.choices.outfit.selected) && value.choices.outfit.selected >= baseOptionCounts.outfit) {
       value.choices.outfit.selected += categories.find(c => c.id === 'outfit')!.options.length - baseOptionCounts.outfit;
+    }
+    // Version 3 stored NSFW-only candidates right after fewer regular candidates; shift them past the newly appended ones.
+    if (value.version === 3) for (const c of categories) {
+      const item = value.choices[c.id];
+      if (item && Number.isInteger(item.selected) && item.selected >= V3_REGULAR_COUNTS[c.id]) item.selected += c.options.length - V3_REGULAR_COUNTS[c.id];
     }
     // Categories added after a save was written start from their defaults instead of discarding the whole save.
     for (const c of categories) value.choices[c.id] ??= initialChoices()[c.id];
@@ -50,7 +57,7 @@ export function restore(raw: string | null, adult = false): Choices {
     return sanitizeChoices(Object.fromEntries(categories.map(c => [c.id, value.choices[c.id]])), adult);
   } catch { return initialChoices(); }
 }
-export function serialize(choices: Choices) { return JSON.stringify({ version: 3, choices }); }
+export function serialize(choices: Choices) { return JSON.stringify({ version: 4, choices }); }
 export function sanitizeChoices(choices: Choices, adult: boolean): Choices {
   return Object.fromEntries(getCategories(adult).map(c => [c.id, choices[c.id].selected < c.options.length ? choices[c.id] : {...choices[c.id], selected: 0}]));
 }

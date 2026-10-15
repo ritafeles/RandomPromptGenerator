@@ -5,6 +5,7 @@ import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { adultTags } from './danbooru-adult-tags.mjs';
 import { extraArtists, extraStyles, extraTags } from './danbooru-extra-tags.mjs';
+import { moreArtists, moreStyles, moreTags } from './danbooru-more-tags.mjs';
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 // Danbooru のタグ名（アンダースコア区切り）→ 日本語ラベル。記号のみの顔文字は区切りをそのまま使う。
 const curated = {
@@ -34,7 +35,7 @@ async function counts(names, categories = [0, 5]) {
   }
   return result;
 }
-for (const [id, entries] of Object.entries(extraTags)) curated[id] = { ...entries, ...curated[id] };
+for (const [id, entries] of [...Object.entries(extraTags), ...Object.entries(moreTags)]) curated[id] = { ...entries, ...curated[id] };
 const existing = (await Promise.all(['src/data.ts', 'src/extra-options.ts', 'src/more-options.ts'].map(f => readFile(resolve(root, f), 'utf8')))).join('\n');
 // NSFWモード専用（成人・非露骨）。水着・ランジェリー・色気のある表情やポーズまでで、露骨な性描写タグは含めない。
 const curatedAdult = {
@@ -61,19 +62,31 @@ async function build(source, existingText) {
 }
 const NL = String.fromCharCode(10);
 const render = out => Object.entries(out).map(([id, rows]) => ` ${id}: [${rows.map(r => `'${r.replace(/\\/g, '\\\\')}'`).join(',')}],`).join(NL);
-const regular = await build(curated, existing);
-const adult = await build(curatedAdult, existing);
+// 前回生成した候補。保存データは候補の番号で選択を記録するため、既存の順序を保ち、新しいタグは末尾に追加する。
+const previous = {};
+try {
+  const text = await readFile(resolve(root, 'src/danbooru-options.ts'), 'utf8');
+  new Function('previous', text.replace(/^export const (\w+)[^=]*=/gm, 'previous.$1 ='))(previous);
+} catch { /* 初回生成 */ }
+const tagOf = row => row.slice(row.indexOf('|') + 1);
+const appendNew = (prev = [], rows) => { const seen = new Set(prev.map(tagOf)); return [...prev, ...rows.filter(r => !seen.has(tagOf(r)))]; };
+const merge = (prev = {}, out) => Object.fromEntries([...new Set([...Object.keys(prev), ...Object.keys(out)])].map(id => [id, appendNew(prev[id], out[id] ?? [])]));
+// NSFWモード専用の候補と同じタグを通常候補に加えると、NSFWモードの候補の番号がずれるため除く。
+const adultTagsOf = id => new Set((previous.danbooruAdultOptions?.[id] ?? []).map(tagOf));
+const regularBuilt = await build(curated, existing);
+const regular = merge(previous.danbooruOptions, Object.fromEntries(Object.entries(regularBuilt).map(([id, rows]) => [id, rows.filter(r => !adultTagsOf(id).has(tagOf(r)))])));
+const adult = merge(previous.danbooruAdultOptions, await build(curatedAdult, existing));
 // 人気アーティスト（Danbooru の artist タグ）。プロンプトには artist:名前 の形で出力する。
 const artistNames = ["tony_taka","ixy","huke","namori","kantoku","tsunako","takeuchi_takashi","toosaka_asagi","yamamoto_souichirou","tomose_shunsaku","matsuryuu","ilya_kuvshinov","mizumoto_tadashi","swd3e2","lack","kishida_mel","fuzichoco","fkey","mika_pikazo","nardack","atdan","sakimichan","mignon","ke-ta","mitsumi_misato","kuroboshi_kouhaku","hanekoto","anmi","yamanashi_taiki","ningen_mame","kakage","oda_non","ogipote","tsubasa_tsubasa","yuuki_tatsuya","kawacy","rella","shirokitsune","tiv","aoi_ogata","redjuice","nanaken_nana","rei_kun","wlop","onineko","nyanya","nekojira"];
-artistNames.push(...extraArtists.filter(n => !artistNames.includes(n)));
+artistNames.push(...[...extraArtists, ...moreArtists].filter(n => !artistNames.includes(n)));
 const artistCounts = await counts(artistNames, [1]);
-const artistRows = artistNames.filter(n => (artistCounts.get(n) ?? 0) > 0).sort((a, b) => artistCounts.get(b) - artistCounts.get(a)).map(n => `${n.replace(/_/g, ' ')}|artist:${toPrompt(n)}`);
+const artistRows = appendNew(previous.danbooruArtists, artistNames.filter(n => (artistCounts.get(n) ?? 0) > 0).sort((a, b) => artistCounts.get(b) - artistCounts.get(a)).map(n => `${n.replace(/_/g, ' ')}|artist:${toPrompt(n)}`));
 console.log(`artist: ${artistRows.length} 件`);
 // 絵柄タグ。括弧付きのタグは強調構文と誤解されないよう ( ) にエスケープして出力する。
 const styleNames = {"anime_coloring":"アニメ塗り","flat_color":"フラットカラー","realistic":"リアル調","photorealistic":"フォトリアル","sketch":"スケッチ","lineart":"線画","pixel_art":"ドット絵","chibi":"ちび","3d":"3D風","retro_artstyle":"レトロ調","painting_(medium)":"絵画","watercolor_(medium)":"水彩","oil_painting_(medium)":"油彩","marker_(medium)":"マーカー","colored_pencil_(medium)":"色鉛筆","graphite_(medium)":"鉛筆画","acrylic_paint_(medium)":"アクリル絵の具","ink_(medium)":"インク画","pastel_(medium)":"パステル画","gouache_(medium)":"ガッシュ","traditional_media":"アナログ画","monochrome":"モノクロ","greyscale":"グレースケール","sepia":"セピア","limited_palette":"限定色","spot_color":"ワンポイントカラー","partially_colored":"部分着色","halftone":"ハーフトーン","screentones":"スクリーントーン","comic":"漫画風","2000s_(style)":"2000年代風","1990s_(style)":"1990年代風","1980s_(style)":"1980年代風","painterly":"厚塗り風","concept_art":"コンセプトアート","official_style":"公式イラスト風","toon_(style)":"トゥーン調","stained_glass":"ステンドグラス","no_lineart":"線画なし","pastel_colors":"パステルカラー","high_contrast":"ハイコントラスト","minimalism":"ミニマル","impressionism":"印象派","ukiyo-e":"浮世絵","art_nouveau":"アールヌーボー","western_comics_(style)":"アメコミ風","low_poly":"ローポリ","crosshatching":"クロスハッチング","vaporwave":"ヴェイパーウェイブ"};
-Object.assign(styleNames, Object.fromEntries(Object.entries(extraStyles).filter(([n]) => !(n in styleNames))));
+Object.assign(styleNames, Object.fromEntries([...Object.entries(extraStyles), ...Object.entries(moreStyles)].filter(([n]) => !(n in styleNames))));
 const styleCounts = await counts(Object.keys(styleNames));
-const styleRows = Object.keys(styleNames).filter(n => (styleCounts.get(n) ?? 0) > 0).sort((a, b) => styleCounts.get(b) - styleCounts.get(a)).map(n => `${styleNames[n]}|${n.replace(/_/g, ' ').replace(/[()]/g, '\\$&')}`);
+const styleRows = appendNew(previous.danbooruStyles, Object.keys(styleNames).filter(n => (styleCounts.get(n) ?? 0) > 0).sort((a, b) => styleCounts.get(b) - styleCounts.get(a)).map(n => `${styleNames[n]}|${n.replace(/_/g, ' ').replace(/[()]/g, '\\$&')}`));
 console.log(`artStyle: ${styleRows.length} 件`);
-const header = '// scripts/danbooru-options.mjs で生成（Danbooru の投稿数上位順）。直接編集せず再生成してください。';
+const header = '// scripts/danbooru-options.mjs で生成（既存の候補の順序を保ち、新しいタグを投稿数順で末尾に追加）。直接編集せず再生成してください。';
 await writeFile(resolve(root, 'src/danbooru-options.ts'), [header, 'export const danbooruOptions: Record<string, string[]> = {', render(regular), '};', '// NSFWモード専用（成人・非露骨）の候補。', 'export const danbooruAdultOptions: Record<string, string[]> = {', render(adult), '};', '// 人気アーティスト（投稿数順）。', `export const danbooruArtists: string[] = [${artistRows.map(r => `'${r.replace(/\\/g, '\\\\')}'`).join(',')}];`, '// 絵柄タグ（投稿数順）。', `export const danbooruStyles: string[] = [${styleRows.map(r => `'${r.replace(/\\/g, '\\\\')}'`).join(',')}];`, ''].join(NL));
