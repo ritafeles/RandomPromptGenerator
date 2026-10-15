@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { baseOptionCounts, categories, getCategories } from './data';
 import { initialChoices, reroll, buildPrompt, restore, serialize, normalizeTags, restoreOptions } from './generator';
+// Version 3 saves only held indices that existed back then, so start every category from its first candidate.
+const v3Choices = () => Object.fromEntries(Object.entries(initialChoices()).map(([id, c]) => [id, { ...c, selected: 0 }]));
 describe('prompt invariants', () => {
   it('always begins with exactly one 1girl across 2000 generations', () => {
     let state = initialChoices();
@@ -75,6 +77,31 @@ it('migrates version 2 adult outfit indices past the Danbooru candidates', () =>
  expect(getCategories(true).find(c => c.id === 'outfit')!.options[restored.outfit.selected].label).toBe('成人 · ビキニ');
 });
 
+it('migrates version 3 NSFW indices past newly appended regular candidates', () => {
+ const regular = categories.find(c => c.id === 'pose')!.options.length;
+ const adultPose = getCategories(true).find(c => c.id === 'pose')!;
+ const state = v3Choices(); state.pose = {enabled:true, locked:true, selected:161}; state.hairStyle = {enabled:true, locked:true, selected:5};
+ const restored = restore(JSON.stringify({version:3, choices:state}), true);
+ expect(restored.pose).toEqual({enabled:true, locked:true, selected:regular});
+ expect(adultPose.options[restored.pose.selected].label).toMatch(/^成人 · /);
+ expect(restored.hairStyle.selected).toBe(5);
+ expect(restore(serialize(restored), true)).toEqual(restored);
+});
+
+it('keeps the NSFW-only candidates that version 3 saves point to', () => {
+ // Adding a regular tag that is also an NSFW-only tag would drop it from the NSFW list and shift saved indices.
+ const regular = getCategories(false), adult = getCategories(true);
+ const extras = Object.fromEntries(adult.map((c, i) => [c.id, c.options.length - regular[i].options.length]));
+ expect(extras).toEqual({ hairStyle: 0, hairColor: 0, eyes: 0, expression: 19, outfit: 111, pose: 26, background: 34, framing: 2, lighting: 1, artStyle: 0, artist: 0 });
+});
+
+it('includes the third batch of Danbooru tags', () => {
+ const tagsOf = (id: string) => categories.find(c => c.id === id)!.options.map(o => o.tags);
+ expect(tagsOf('hairStyle')).toContain('floating hair'); expect(tagsOf('eyes')).toContain('jitome'); expect(tagsOf('outfit')).toContain('bowtie');
+ expect(tagsOf('pose')).toContain('fox shadow puppet'); expect(tagsOf('background')).toContain('hydrangea'); expect(tagsOf('framing')).toContain('depth of field');
+ expect(tagsOf('lighting')).toContain('bioluminescence'); expect(tagsOf('artStyle')).toContain('nihonga'); expect(tagsOf('artist')).toContain('artist:loundraw');
+});
+
 it('adds Danbooru adult candidates to every supported category only in NSFW mode', () => {
  const regular = getCategories(false), adult = getCategories(true);
  for (const id of ['outfit', 'pose', 'expression', 'background', 'framing', 'lighting']) {
@@ -92,7 +119,7 @@ it('adds artist:name tags and keeps older saves that predate the artist category
  const artist = categories.find(c => c.id === 'artist')!;
  expect(artist.options.length).toBeGreaterThan(40);
  expect(artist.options.every(o => o.tags.startsWith('artist:'))).toBe(true);
- const state = initialChoices(); state.hairStyle = {enabled:true, locked:true, selected:2};
+ const state = v3Choices(); state.hairStyle = {enabled:true, locked:true, selected:2};
  const { artist: _removed, ...legacy } = state;
  const restored = restore(JSON.stringify({version:3, choices:legacy}));
  expect(restored.hairStyle).toEqual({enabled:true, locked:true, selected:2});
